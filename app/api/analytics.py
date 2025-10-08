@@ -63,6 +63,114 @@ async def recalculate_scores(
         "updated_scores": updated_scores
     }
 
+@router.get("/dashboard")
+async def get_dashboard_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get dashboard analytics data"""
+    from app.models.task import Task
+    from sqlalchemy import func
+    
+    if current_user.role == "manager":
+        # Manager dashboard - all tasks
+        total_tasks = db.query(Task).count()
+        completed_tasks = db.query(Task).filter(Task.status == "completed").count()
+        in_progress_tasks = db.query(Task).filter(Task.status == "in_progress").count()
+        pending_tasks = db.query(Task).filter(Task.status == "pending").count()
+        overdue_tasks = db.query(Task).filter(
+            Task.status != "completed",
+            Task.due_date < func.now()
+        ).count()
+        
+        # Team stats
+        team_stats = scoring_service.calculate_team_stats(db)
+        
+        return {
+            "totalTasks": total_tasks,
+            "completedTasks": completed_tasks,
+            "inProgressTasks": in_progress_tasks,
+            "pendingTasks": pending_tasks,
+            "overdueTasks": overdue_tasks,
+            "teamStats": team_stats
+        }
+    else:
+        # Employee dashboard - only their tasks
+        total_tasks = db.query(Task).filter(Task.assigned_to == current_user.id).count()
+        completed_tasks = db.query(Task).filter(
+            Task.assigned_to == current_user.id,
+            Task.status == "completed"
+        ).count()
+        in_progress_tasks = db.query(Task).filter(
+            Task.assigned_to == current_user.id,
+            Task.status == "in_progress"
+        ).count()
+        pending_tasks = db.query(Task).filter(
+            Task.assigned_to == current_user.id,
+            Task.status == "pending"
+        ).count()
+        overdue_tasks = db.query(Task).filter(
+            Task.assigned_to == current_user.id,
+            Task.status != "completed",
+            Task.due_date < func.now()
+        ).count()
+        
+        return {
+            "totalTasks": total_tasks,
+            "completedTasks": completed_tasks,
+            "inProgressTasks": in_progress_tasks,
+            "pendingTasks": pending_tasks,
+            "overdueTasks": overdue_tasks
+        }
+
+@router.get("/user-performance")
+async def get_user_performance(
+    user_id: int = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get user performance metrics"""
+    from app.models.task import Task
+    from sqlalchemy import func
+    from datetime import datetime, timedelta
+    
+    # Determine which user's performance to get
+    target_user_id = user_id if user_id and current_user.role == "manager" else current_user.id
+    
+    # Get tasks for the user
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+    
+    recent_tasks = db.query(Task).filter(
+        Task.assigned_to == target_user_id,
+        Task.created_at >= thirty_days_ago
+    ).all()
+    
+    total_tasks = len(recent_tasks)
+    completed_tasks = len([t for t in recent_tasks if t.status == "completed"])
+    overdue_tasks = len([t for t in recent_tasks if t.status != "completed" and t.due_date < datetime.now()])
+    
+    # Calculate performance metrics
+    completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
+    avg_completion_time = 0  # You could calculate this based on task creation and completion dates
+    
+    # Get user profile
+    user = db.query(User).filter(User.id == target_user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    profile = user.employee_profile if user.role == "employee" else user.manager_profile
+    
+    return {
+        "userId": target_user_id,
+        "name": profile.name if profile else user.email,
+        "totalTasks": total_tasks,
+        "completedTasks": completed_tasks,
+        "overdueTasks": overdue_tasks,
+        "completionRate": completion_rate,
+        "averageCompletionTime": avg_completion_time,
+        "score": profile.score if hasattr(profile, 'score') else 0
+    }
+
 @router.get("/my-stats")
 async def get_my_stats(
     db: Session = Depends(get_db),

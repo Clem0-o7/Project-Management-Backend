@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import datetime
 from app.core.database import get_db
 from app.models.task import Task, TaskStatusReport
 from app.models.user import User
@@ -150,6 +151,67 @@ async def create_status_report(
     db.commit()
     db.refresh(db_report)
     return db_report
+
+@router.post("/{task_id}/status")
+async def update_task_status(
+    task_id: int,
+    status_data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update task status"""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Check permissions
+    if current_user.role == "employee" and task.assigned_to != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own tasks"
+        )
+    
+    # Update status
+    new_status = status_data.get("status")
+    if new_status:
+        task.status = new_status
+        
+        # Update completion date if completed
+        if new_status == "completed":
+            task.completed_at = datetime.now()
+    
+    db.commit()
+    db.refresh(task)
+    return {"message": "Task status updated successfully", "task": task}
+
+@router.post("/ai/chat")
+async def ai_chat(
+    chat_data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """AI Chat functionality"""
+    message = chat_data.get("message", "")
+    
+    # Simple AI response for now - you can integrate with actual AI later
+    if "task" in message.lower():
+        response = "I can help you with task management! You can create, update, or check the status of tasks. What would you like to do?"
+    elif "deadline" in message.lower() or "due" in message.lower():
+        response = "I can help you track deadlines. Would you like me to show you upcoming deadlines or help extend a deadline?"
+    elif "progress" in message.lower():
+        response = "I can help you track progress on your tasks. Would you like to see your progress overview?"
+    elif "team" in message.lower():
+        if current_user.role == "manager":
+            response = "I can help you manage your team! You can view team performance, assign tasks, or check team statistics."
+        else:
+            response = "I can help you coordinate with your team. You can check team updates or communicate progress."
+    else:
+        response = "Hello! I'm your AI assistant. I can help you with task management, deadlines, progress tracking, and team coordination. What can I help you with today?"
+    
+    return {
+        "response": response,
+        "timestamp": "2024-01-01T00:00:00Z"  # You can use actual timestamp
+    }
 
 @router.get("/{task_id}/reports", response_model=List[TaskStatusReportSchema])
 async def get_task_reports(
